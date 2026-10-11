@@ -1,0 +1,14 @@
+torch
+torchvision
+numpy
+pandas
+scikit-learn
+scikit-image
+matplotlib
+pillow
+pyyaml
+tqdm
+jupyter
+ipykernel
+kaggle
+python-dotenv
