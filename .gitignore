@@ -1,6 +1,17 @@
 # Daten und Modelle gehören nie ins Repo
 data/*
 !data/.gitkeep
+malaria/
+*.zip
+images/
+cells/
+smears/
+# Mikroskopbilder, egal wo sie liegen (Abbildungen für den Bericht unter docs/ sind erlaubt)
+*.jpg
+*.jpeg
+*.png
+!docs/**/*.png
+!docs/**/*.jpg
 runs/
 checkpoints/
 *.pt
