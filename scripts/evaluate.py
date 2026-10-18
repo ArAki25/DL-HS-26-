@@ -1,6 +1,7 @@
 """Wertet ein trainiertes Modell auf val oder test aus.
 
     python scripts/evaluate.py runs/<name>/best.pt --split test
+    python scripts/evaluate.py runs/<name>/best.pt --fraction 0.1   # schneller Test
 
 Schreibt metrics_<split>.json und confusion_<split>.png neben den Checkpoint.
 """
@@ -18,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.data import (CellDataset, SmearDataset, cell_transform, load_cells,  # noqa: E402
-                      load_smears, smear_transform)
+                      load_smears, smear_transform, subsample_images)
 from src.engine import compute_metrics, get_device, predict  # noqa: E402
 from src.models import load_checkpoint  # noqa: E402
 
@@ -43,23 +44,27 @@ def main():
     p.add_argument("checkpoint", type=Path)
     p.add_argument("--split", choices=["val", "test"], default="val")
     p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--fraction", type=float, default=1.0,
+                   help="nur Anteil der Bilder auswerten (schneller Test), Default: alle")
     args = p.parse_args()
 
     device = get_device()
     model, ckpt = load_checkpoint(args.checkpoint, device)
     task, size, names = ckpt["task"], ckpt["img_size"], ckpt["class_names"]
+    df = subsample_images((load_smears if task == "smear" else load_cells)(args.split), args.fraction)
     if task == "smear":
-        ds = SmearDataset(load_smears(args.split), smear_transform(size))
+        ds = SmearDataset(df, smear_transform(size))
     else:
-        ds = CellDataset(load_cells(args.split), task, cell_transform(size))
+        ds = CellDataset(df, task, cell_transform(size))
 
     multilabel = task == "smear"
     probs, targets = predict(model, DataLoader(ds, args.batch_size), device, multilabel)
     metrics = compute_metrics(probs, targets, names, multilabel)
     out = args.checkpoint.parent
-    (out / f"metrics_{args.split}.json").write_text(json.dumps(metrics, indent=2))
+    suffix = args.split if args.fraction >= 1 else f"{args.split}_{args.fraction:g}"
+    (out / f"metrics_{suffix}.json").write_text(json.dumps(metrics, indent=2))
     if "confusion_matrix" in metrics:
-        plot_confusion(metrics["confusion_matrix"], names, out / f"confusion_{args.split}.png")
+        plot_confusion(metrics["confusion_matrix"], names, out / f"confusion_{suffix}.png")
     print(json.dumps(metrics, indent=2))
 
 

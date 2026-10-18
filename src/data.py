@@ -163,6 +163,20 @@ def load_smears(split=None):
     return _read_csv("smears.csv", split)
 
 
+def subsample_images(df, fraction, seed=42):
+    """Nur einen Teil der Bilder behalten (für schnelle Tests), mit allen ihren Zellen.
+
+    Gezogen wird nach image_id, damit Zellen eines Bildes zusammenbleiben. Mit gleichem
+    Seed ist die Auswahl immer dieselbe, Läufe bleiben also vergleichbar.
+    """
+    if fraction >= 1:
+        return df
+    ids = np.sort(df["image_id"].unique())
+    n = max(1, round(len(ids) * fraction))
+    keep = np.random.default_rng(seed).choice(ids, size=n, replace=False)
+    return df[df["image_id"].isin(keep)].reset_index(drop=True)
+
+
 def cell_labels(df, task="stage"):
     """task='stage': Index in CELL_CLASSES, task='binary': 1 = infiziert."""
     if task == "stage":

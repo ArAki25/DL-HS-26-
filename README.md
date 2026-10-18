@@ -72,8 +72,24 @@ Hauptmetrik ist **Macro-F1**, nicht Accuracy: ein Modell, das immer "rbc" sagt, 
 
 ## Training und Auswertung
 
+Vor dem Start fragt `train.py`, wie viele Daten verwendet werden. Das spart beim Ausprobieren viel Zeit:
+
+```
+Wie viele Daten sollen verwendet werden? (Train und Val werden gleich verkleinert)
+  [1] Schnelltest     5%  ~   51 Bilder, ~  3384 Samples, 3 Epochen vorgeschlagen
+  [2] Klein          20%  ...
+  [3] Mittel         50%  ...
+  [4] Alles         100%  ...
+  oder eigenen Prozentwert eingeben, z. B. 10%
+Auswahl [1]:
+Epochen [3]:
+```
+
+Mit `--fraction 0.1 --epochs 5` wird nicht gefragt (z. B. für Skripte oder Server). Die Teilmenge wird nach Bildern gezogen und ist mit gleichem `--seed` immer dieselbe, Läufe bleiben also vergleichbar. Für finale Resultate im Bericht immer `--fraction 1` verwenden.
+
 ```bash
-python scripts/train.py --task stage --model simplecnn --epochs 20
+python scripts/train.py --task stage --model simplecnn                     # mit Abfrage
+python scripts/train.py --task stage --model simplecnn --fraction 0.05 --epochs 3   # Schnelltest ohne Abfrage
 python scripts/train.py --task binary --model resnet18 --pretrained
 python scripts/train.py --task smear --model simplecnn-deep --batch-size 16
 

@@ -4,6 +4,7 @@
 """
 import json
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,9 @@ import torch
 from sklearn.metrics import (accuracy_score, balanced_accuracy_score, confusion_matrix,
                              f1_score, roc_auc_score)
 from tqdm.auto import tqdm
+
+# Bei kleinen Teilmengen (--fraction) fehlen seltene Klassen in val -> sonst Warnung pro Epoche
+warnings.filterwarnings("ignore", message="y_pred contains classes not in y_true")
 
 
 def get_device():

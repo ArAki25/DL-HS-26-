@@ -1,8 +1,12 @@
 """Trainiert einen Klassifikator auf Zellen oder ganzen Ausstrichen.
 
-    python scripts/train.py --task stage  --model simplecnn --epochs 20
-    python scripts/train.py --task binary --model resnet18 --pretrained
-    python scripts/train.py --task smear  --model simplecnn-deep --img-size 384 --batch-size 16
+    python scripts/train.py --task stage  --model simplecnn          # fragt nach Datenmenge
+    python scripts/train.py --task binary --model resnet18 --pretrained --fraction 0.2 --epochs 5
+    python scripts/train.py --task smear  --model simplecnn-deep --batch-size 16 --fraction 1
+
+Ohne --fraction / --epochs fragt das Skript vor dem Start, wie viel trainiert wird
+(Schnelltest, Klein, Mittel, Alles oder eigener Prozentwert). Die Teilmenge wird nach
+Bildern gezogen und ist bei gleichem Seed immer dieselbe.
 
 Tasks:
     stage   Zelle -> rbc / leukocyte / ring / trophozoite / schizont / gametocyte
@@ -26,17 +30,53 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.data import (CellDataset, SmearDataset, balanced_sampler, cell_transform,  # noqa: E402
-                      class_names, class_weights, load_cells, load_smears, smear_transform)
+                      class_names, class_weights, load_cells, load_smears, smear_transform,
+                      subsample_images)
 from src.engine import compute_metrics, fit, get_device, predict  # noqa: E402
 from src.models import build_model, count_parameters  # noqa: E402
 
 
-def make_datasets(task, img_size):
+# Name, Anteil der Bilder, vorgeschlagene Epochen
+PRESETS = [("Schnelltest", 0.05, 3), ("Klein", 0.2, 10), ("Mittel", 0.5, 15), ("Alles", 1.0, 20)]
+
+
+def ask_fraction(train_df):
+    """Menü: wie viel der Daten verwenden? Gibt (Anteil, vorgeschlagene Epochen) zurück."""
+    n_img, n_rows = train_df["image_id"].nunique(), len(train_df)
+    print("\nWie viele Daten sollen verwendet werden? (Train und Val werden gleich verkleinert)")
+    for k, (label, frac, ep) in enumerate(PRESETS, 1):
+        print(f"  [{k}] {label:12s} {frac:5.0%}  ~{round(n_img * frac):5d} Bilder, "
+              f"~{round(n_rows * frac):6d} Samples, {ep} Epochen vorgeschlagen")
+    print("  oder eigenen Prozentwert eingeben, z. B. 10%")
+    while True:
+        answer = input("Auswahl [1]: ").strip() or "1"
+        if answer.isdigit() and 1 <= int(answer) <= len(PRESETS):
+            return PRESETS[int(answer) - 1][1:]
+        try:
+            value = float(answer.rstrip("%"))
+        except ValueError:
+            value = -1
+        if 0 < value <= 100:
+            return value / 100, 10
+        print(f"Bitte 1-{len(PRESETS)} oder einen Prozentwert wie 10% eingeben.")
+
+
+def ask_epochs(suggested):
+    while True:
+        answer = input(f"Epochen [{suggested}]: ").strip()
+        if not answer:
+            return suggested
+        if answer.isdigit() and int(answer) > 0:
+            return int(answer)
+        print("Bitte eine positive ganze Zahl eingeben.")
+
+
+def make_datasets(task, img_size, train_df, val_df):
     if task == "smear":
-        return (SmearDataset(load_smears("train"), smear_transform(img_size, train=True)),
-                SmearDataset(load_smears("val"), smear_transform(img_size)))
-    return (CellDataset(load_cells("train"), task, cell_transform(img_size, train=True)),
-            CellDataset(load_cells("val"), task, cell_transform(img_size)))
+        return (SmearDataset(train_df, smear_transform(img_size, train=True)),
+                SmearDataset(val_df, smear_transform(img_size)))
+    return (CellDataset(train_df, task, cell_transform(img_size, train=True)),
+            CellDataset(val_df, task, cell_transform(img_size)))
 
 
 def make_criterion(task, train_ds, n_classes, balance):
@@ -56,7 +96,9 @@ def main():
     p.add_argument("--model", default="simplecnn",
                    choices=["simplecnn", "simplecnn-deep", "resnet18", "mobilenet_v3_small"])
     p.add_argument("--pretrained", action="store_true", help="ImageNet-Gewichte (nur torchvision)")
-    p.add_argument("--epochs", type=int, default=20)
+    p.add_argument("--fraction", type=float, default=None,
+                   help="Anteil der Bilder (0-1), z. B. 0.1. Ohne Angabe wird gefragt.")
+    p.add_argument("--epochs", type=int, default=None, help="ohne Angabe wird gefragt")
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--img-size", type=int, default=None, help="Default: 96 (Zellen), 384 (smear)")
@@ -73,7 +115,19 @@ def main():
     multilabel = args.task == "smear"
     device = get_device()
 
-    train_ds, val_ds = make_datasets(args.task, img_size)
+    load = load_smears if multilabel else load_cells
+    train_df, val_df = load("train"), load("val")
+    interactive = sys.stdin.isatty()  # False z. B. bei Jobs auf einem Server: dann nicht fragen
+    suggested = 20
+    if args.fraction is None:
+        args.fraction, suggested = ask_fraction(train_df) if interactive else (1.0, 20)
+    if not 0 < args.fraction <= 1:
+        sys.exit("--fraction muss zwischen 0 und 1 liegen, z. B. 0.1 für 10 %.")
+    if args.epochs is None:
+        args.epochs = ask_epochs(suggested) if interactive else suggested
+    train_df = subsample_images(train_df, args.fraction, args.seed)
+    val_df = subsample_images(val_df, args.fraction, args.seed)
+    train_ds, val_ds = make_datasets(args.task, img_size, train_df, val_df)
     sampler = None
     if not multilabel and args.balance == "sampler":
         sampler = balanced_sampler(train_ds.labels)
@@ -90,8 +144,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "config.json").write_text(json.dumps(config, indent=2))
 
-    print(f"{args.task} | {args.model} ({config['parameters']:,} Parameter) | {device} | "
-          f"train {len(train_ds)} / val {len(val_ds)} | -> {out_dir}")
+    print(f"\n{args.task} | {args.model} ({config['parameters']:,} Parameter) | {device} | "
+          f"{args.fraction:.0%} der Daten: train {len(train_ds)} / val {len(val_ds)} | "
+          f"{args.epochs} Epochen | -> {out_dir}")
     fit(model, train_loader, val_loader, criterion, names, epochs=args.epochs, lr=args.lr,
         multilabel=multilabel, device=device, out_dir=out_dir,
         checkpoint_extra={"task": args.task, "model": args.model, "img_size": img_size})
