@@ -22,6 +22,7 @@ from src.data import STAGES, cell_transform, crop_box  # noqa: E402
 from src.engine import get_device  # noqa: E402
 from src.models import load_checkpoint  # noqa: E402
 from src.segmentation import detect_cells  # noqa: E402
+from src.stain import StainNormalizer  # noqa: E402
 
 COLORS = {"rbc": "#4c9be8", "uninfected": "#4c9be8", "leukocyte": "#9b59b6",
           "ring": "#e67e22", "trophozoite": "#e74c3c", "schizont": "#c0392b",
@@ -43,7 +44,8 @@ def main():
     p.add_argument("image", type=Path)
     p.add_argument("checkpoint", type=Path, help="Zell-Modell (task stage oder binary)")
     p.add_argument("--out", type=Path, default=None)
-    p.add_argument("--cell-diameter", type=int, default=100)
+    p.add_argument("--cell-diameter", type=int, default=None,
+                   help="Zelldurchmesser in px, Default: pro Bild automatisch geschätzt")
     args = p.parse_args()
 
     device = get_device()
@@ -52,9 +54,12 @@ def main():
         sys.exit("Für predict.py ein Zell-Modell (--task stage/binary) verwenden.")
     names = ckpt["class_names"]
 
+    # Gleiche Farbnormalisierung wie beim Training, sonst sieht das Modell eine andere "Kamera"
+    normalizer = StainNormalizer.from_dict(ckpt.get("normalization") or {"method": "none"})
     image = Image.open(args.image).convert("RGB")
-    boxes = detect_cells(np.asarray(image), cell_diameter=args.cell_diameter)
-    probs = classify_cells(image, boxes, model, ckpt, device)
+    normalized = normalizer(image)
+    boxes = detect_cells(np.asarray(normalized), cell_diameter=args.cell_diameter)
+    probs = classify_cells(normalized, boxes, model, ckpt, device)
     preds = [names[i] for i in probs.argmax(1)]
 
     counts = Counter(preds)

@@ -18,20 +18,42 @@ from skimage.segmentation import watershed
 from skimage.transform import rescale
 
 
-def detect_cells(image, scale=0.5, cell_diameter=100, min_area_frac=0.15, max_area_frac=4.0):
-    """Boxen (N x 4, Spalten r0, c0, r1, c1) in Koordinaten des Originalbilds.
-
-    cell_diameter: typischer Zelldurchmesser in Pixeln im Originalbild (BBBC041: ca. 100).
-    Regionen kleiner/grösser als min/max_area_frac * Fläche einer typischen Zelle fliegen raus.
-    """
-    gray = rgb2gray(image)
+def _cell_mask(image, scale):
+    """Binärmaske 'Zelle' auf verkleinertem Graubild."""
+    gray = rgb2gray(np.asarray(image))
     if scale != 1:
         gray = rescale(gray, scale, anti_aliasing=True)
     gray = gaussian(gray, sigma=2)
-
     mask = gray < threshold_otsu(gray)
     mask = ndi.binary_fill_holes(mask)
-    mask = ndi.binary_opening(mask, iterations=2)
+    return ndi.binary_opening(mask, iterations=2)
+
+
+def estimate_cell_diameter(image, scale=0.25):
+    """Typischer Zelldurchmesser in Pixeln, ohne Annotationen geschätzt.
+
+    Kameras vergrössern unterschiedlich stark (BBBC041: Training ~108 px, Test ~135 px).
+    Einzelne, runde Regionen (Solidity > 0.9) sind fast immer genau eine Zelle; deren
+    medianer Durchmesser ist robust gegen Zellhaufen. Die Maske verpasst den blassen
+    Zellrand, deshalb der Faktor 1.12 (einmal gegen die Trainings-Annotationen kalibriert;
+    danach Abweichung Training ~0 %, Test ~-4 %).
+    """
+    regions = regionprops(ndi.label(_cell_mask(image, scale))[0])
+    diameters = [r.equivalent_diameter_area for r in regions if r.solidity > 0.9 and r.area > 20]
+    if len(diameters) < 5:
+        return None
+    return float(np.median(diameters) / scale * 1.12)
+
+
+def detect_cells(image, scale=0.5, cell_diameter=None, min_area_frac=0.15, max_area_frac=4.0):
+    """Boxen (N x 4, Spalten r0, c0, r1, c1) in Koordinaten des Originalbilds.
+
+    cell_diameter: typischer Zelldurchmesser in Pixeln im Originalbild. None = pro Bild
+    schätzen (estimate_cell_diameter), damit es mit jeder Kamera/Vergrösserung funktioniert.
+    Regionen kleiner/grösser als min/max_area_frac * Fläche einer typischen Zelle fliegen raus.
+    """
+    cell_diameter = cell_diameter or estimate_cell_diameter(image) or 100
+    mask = _cell_mask(image, scale)
 
     radius = cell_diameter * scale / 2
     distance = ndi.distance_transform_edt(mask)

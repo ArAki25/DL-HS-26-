@@ -39,7 +39,7 @@ source .venv/bin/activate             # Windows: .\.venv\Scripts\Activate.ps1
 cp .env.example .env                  # Windows: copy .env.example .env, dann KAGGLE_USERNAME und KAGGLE_KEY ausfüllen
 python scripts/download_data.py       # ca. 2.3 GB nach data/raw/p_vivax/
 
-# 4. Zellen ausschneiden und Bilder verkleinern (einmalig, einige Minuten)
+# 4. Bilder normalisieren, Zellen ausschneiden (einmalig, ca. 10-20 Minuten)
 python scripts/prepare_data.py        # -> data/processed/
 ```
 
@@ -68,7 +68,34 @@ Drei Klassifikationsaufgaben (`--task`):
 
 Modelle (`--model`): `simplecnn` (eigenes CNN, von Grund auf trainiert, [src/models.py](src/models.py)), `simplecnn-deep` (mehr Blöcke, für ganze Bilder), `resnet18` und `mobilenet_v3_small` als Vergleich (mit `--pretrained` ImageNet-Gewichte).
 
-Hauptmetrik ist **Macro-F1**, nicht Accuracy: ein Modell, das immer "rbc" sagt, hätte schon >95 % Accuracy.
+Hauptmetrik ist **Macro-F1**, nicht Accuracy: ein Modell, das immer "rbc" sagt, hätte schon >95 % Accuracy. Auf dem offiziellen Test-Set fehlen Leukozyten ganz, dort deshalb `macro_f1_present` (Mittel nur über vorhandene Klassen) berichten.
+
+## Domain Shift: andere Kamera, andere Färbung
+
+Das offizielle Test-Set stammt aus anderen Ausstrichen und von einer anderen Kamera. Gemessen:
+
+| | Train / Val | Test |
+|---|---|---|
+| Hintergrund (RGB) | ~237, fast weiss | ~153, grau-gelblich |
+| Zellfarbe | kräftig violett | blass rosa |
+| Durchmesser Erythrozyt | ~108 px | ~135 px |
+| Format | PNG | JPG |
+
+Gegenmassnahmen, auf drei Ebenen:
+
+1. **Normalisierung** ([src/stain.py](src/stain.py), in `prepare_data.py`): Weissabgleich auf den Hintergrund, dann Zellfarbe im LAB-Farbraum auf eine Referenz aus Trainingsbildern (Reinhard, nur Vordergrund). Gleiche Funktion für Training, Test und neue Bilder; die Referenz wird im Checkpoint gespeichert, damit `predict.py` identisch vorgeht.
+2. **Augmentation** ([src/augment.py](src/augment.py), `--augment domain`): zufällige Färbung (LAB), JPEG-Kompression, geringere Auflösung, Unschärfe, andere Vergrösserung. Das Netz soll lernen, dass nur die Form der Parasiten zählt.
+3. **Skalierung**: Zellbilder werden aus den Boxen ausgeschnitten und auf 96 px gebracht, sind also unabhängig von der Vergrösserung. Für ganze Bilder und die Segmentierung wird der Zelldurchmesser pro Bild geschätzt ([src/segmentation.py](src/segmentation.py)) und das Bild auf gleiche Zellgrösse skaliert.
+
+Ob es hilft, misst die **Lücke zwischen Val (gleiche Kamera) und Test (andere Kamera)**. Für den Bericht als Ablation:
+
+```bash
+python scripts/prepare_data.py --normalize none     # bzw. whitebalance / stain (Standard)
+python scripts/train.py --task stage --augment basic    # bzw. domain (Standard) / none
+python scripts/evaluate.py runs/<name>/best.pt --split test
+```
+
+`--normalize` wirkt auf die vorbereiteten Daten, nach einem Wechsel also neu trainieren.
 
 ## Training und Auswertung
 
@@ -124,9 +151,11 @@ train_loader = DataLoader(train_ds, batch_size=128, sampler=balanced_sampler(tra
 data/raw/p_vivax/    Rohdaten von Kaggle (lokal, nicht im Repo)
 data/processed/      ausgeschnittene Zellen, verkleinerte Bilder, cells.csv, smears.csv
 src/data.py          Annotationen, Split, Datasets, Transforms, Ungleichgewicht
+src/stain.py         Farbnormalisierung gegen Kamera-/Färbungsunterschiede
+src/augment.py       Domain-Augmentationen (Färbung, JPEG, Auflösung)
 src/models.py        eigenes CNN + torchvision-Modelle
 src/engine.py        Trainingsschleife, Metriken
-src/segmentation.py  Zellen finden ohne YOLO (Otsu + Watershed)
+src/segmentation.py  Zellen finden ohne YOLO (Otsu + Watershed), Zellgrösse schätzen
 scripts/             Download, Vorbereitung, Training, Auswertung, Vorhersage
 notebooks/           Exploration und Experimente, Dateiname: <kürzel>_<thema>.ipynb
 docs/                Notizen, Abbildungen, Bericht

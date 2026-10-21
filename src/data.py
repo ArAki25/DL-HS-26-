@@ -29,10 +29,13 @@ from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import Dataset, WeightedRandomSampler
 from torchvision import transforms
 
+from .augment import RandomDownscale, RandomJPEG, StainJitter
+
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 RAW_DIR = ROOT / os.getenv("DATA_DIR", "data/raw") / "p_vivax"
 PROCESSED_DIR = ROOT / "data" / "processed"
+NORMALIZATION_FILE = PROCESSED_DIR / "normalization.json"
 
 # Kategorie im JSON -> kurzer Name (auch Ordnername der ausgeschnittenen Zellen)
 CATEGORIES = {
@@ -193,29 +196,50 @@ def class_names(task):
 
 # --------------------------------------------------------------------------- Transforms
 
-def cell_transform(img_size=96, train=False):
-    """Zellen sind ca. 80-150 px gross. ColorJitter simuliert unterschiedliche Färbungen."""
-    steps = [transforms.Resize((img_size, img_size))]
-    if train:
-        steps += [
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),
-            transforms.RandomRotation(15),
-            transforms.ColorJitter(0.15, 0.15, 0.15, 0.02),
-        ]
+AUGMENTATIONS = ("domain", "basic", "none")
+
+
+def _domain_steps():
+    """Gegen Färbung/Kamera: Farbe, Kompression, Auflösung, Fokus zufällig variieren."""
+    return [
+        StainJitter(),
+        RandomJPEG(),
+        RandomDownscale(),
+        transforms.RandomApply([transforms.GaussianBlur(5, sigma=(0.1, 1.2))], p=0.2),
+    ]
+
+
+def cell_transform(img_size=96, train=False, augment="domain"):
+    """Zellen sind 100-140 px gross (je nach Kamera) und werden auf img_size skaliert.
+
+    augment: 'domain' = Geometrie + Domain-Augmentationen (Standard),
+             'basic' = nur Geometrie + leichter ColorJitter, 'none' = keine (für Ablation).
+    """
+    if not train or augment == "none":
+        steps = [transforms.Resize((img_size, img_size))]
+    else:
+        # RandomResizedCrop: andere Vergrösserung / anderer Ausschnitt um die Zelle
+        steps = [transforms.RandomResizedCrop(img_size, scale=(0.7, 1.0), ratio=(0.85, 1.18)),
+                 transforms.RandomHorizontalFlip(),
+                 transforms.RandomVerticalFlip(),
+                 transforms.RandomRotation(15)]
+        if augment == "domain":
+            steps += _domain_steps()
+        else:
+            steps += [transforms.ColorJitter(0.15, 0.15, 0.15, 0.02)]
     steps += [transforms.ToTensor(), transforms.Normalize(MEAN, STD)]
     return transforms.Compose(steps)
 
 
-def smear_transform(img_size=384, train=False):
-    """Ganze Bilder werden quadratisch skaliert (leichte Verzerrung 4:3 -> 1:1)."""
+def smear_transform(img_size=384, train=False, augment="domain"):
+    """Ganze Bilder, in prepare_data.py schon auf gleiche Zellgrösse skaliert."""
     steps = [transforms.Resize((img_size, img_size))]
-    if train:
-        steps += [
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),
-            transforms.ColorJitter(0.15, 0.15, 0.15, 0.02),
-        ]
+    if train and augment != "none":
+        steps += [transforms.RandomHorizontalFlip(), transforms.RandomVerticalFlip()]
+        if augment == "domain":
+            steps += _domain_steps()
+        else:
+            steps += [transforms.ColorJitter(0.15, 0.15, 0.15, 0.02)]
     steps += [transforms.ToTensor(), transforms.Normalize(MEAN, STD)]
     return transforms.Compose(steps)
 

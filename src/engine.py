@@ -62,6 +62,11 @@ def compute_metrics(probs, targets, class_names, multilabel=False):
                                                        zero_division=0).tolist())),
         "confusion_matrix": confusion_matrix(targets, preds, labels=labels).tolist(),
     }
+    # Fehlt eine Klasse im Split ganz (z. B. Leukozyten im offiziellen Test-Set), zieht sie
+    # macro_f1 mit F1 = 0 runter. macro_f1_present mittelt nur über vorhandene Klassen.
+    present = sorted(set(np.unique(targets).tolist()))
+    m["macro_f1_present"] = f1_score(targets, preds, labels=present, average="macro", zero_division=0)
+    m["missing_classes"] = [class_names[k] for k in labels if k not in present]
     if len(class_names) == 2 and len(np.unique(targets)) == 2:
         m["roc_auc"] = roc_auc_score(targets, probs[:, 1])
     return _to_float(m)

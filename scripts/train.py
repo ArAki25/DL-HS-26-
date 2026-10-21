@@ -29,9 +29,9 @@ from torch.utils.data import DataLoader
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.data import (CellDataset, SmearDataset, balanced_sampler, cell_transform,  # noqa: E402
-                      class_names, class_weights, load_cells, load_smears, smear_transform,
-                      subsample_images)
+from src.data import (AUGMENTATIONS, NORMALIZATION_FILE, CellDataset, SmearDataset,  # noqa: E402
+                      balanced_sampler, cell_transform, class_names, class_weights, load_cells,
+                      load_smears, smear_transform, subsample_images)
 from src.engine import compute_metrics, fit, get_device, predict  # noqa: E402
 from src.models import build_model, count_parameters  # noqa: E402
 
@@ -71,11 +71,11 @@ def ask_epochs(suggested):
         print("Bitte eine positive ganze Zahl eingeben.")
 
 
-def make_datasets(task, img_size, train_df, val_df):
+def make_datasets(task, img_size, train_df, val_df, augment):
     if task == "smear":
-        return (SmearDataset(train_df, smear_transform(img_size, train=True)),
+        return (SmearDataset(train_df, smear_transform(img_size, train=True, augment=augment)),
                 SmearDataset(val_df, smear_transform(img_size)))
-    return (CellDataset(train_df, task, cell_transform(img_size, train=True)),
+    return (CellDataset(train_df, task, cell_transform(img_size, train=True, augment=augment)),
             CellDataset(val_df, task, cell_transform(img_size)))
 
 
@@ -102,6 +102,8 @@ def main():
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--img-size", type=int, default=None, help="Default: 96 (Zellen), 384 (smear)")
+    p.add_argument("--augment", choices=AUGMENTATIONS, default="domain",
+                   help="domain: Farbe/JPEG/Auflösung/Schärfe gegen Kamera-Unterschiede (Standard)")
     p.add_argument("--balance", choices=["sampler", "loss", "none"], default="sampler",
                    help="Umgang mit Klassen-Ungleichgewicht (nur Zell-Tasks)")
     p.add_argument("--workers", type=int, default=2)
@@ -127,7 +129,7 @@ def main():
         args.epochs = ask_epochs(suggested) if interactive else suggested
     train_df = subsample_images(train_df, args.fraction, args.seed)
     val_df = subsample_images(val_df, args.fraction, args.seed)
-    train_ds, val_ds = make_datasets(args.task, img_size, train_df, val_df)
+    train_ds, val_ds = make_datasets(args.task, img_size, train_df, val_df, args.augment)
     sampler = None
     if not multilabel and args.balance == "sampler":
         sampler = balanced_sampler(train_ds.labels)
@@ -139,17 +141,22 @@ def main():
     criterion = make_criterion(args.task, train_ds, len(names), args.balance)
     name = args.name or f"{datetime.now():%Y%m%d-%H%M}_{args.task}_{args.model}"
     out_dir = ROOT / "runs" / name
+    normalization = json.loads(NORMALIZATION_FILE.read_text()) if NORMALIZATION_FILE.exists() else None
     config = {**vars(args), "img_size": img_size, "class_names": list(names),
+              "normalization": normalization,
               "n_train": len(train_ds), "n_val": len(val_ds), "parameters": count_parameters(model)}
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "config.json").write_text(json.dumps(config, indent=2))
 
+    norm = normalization["method"] if normalization else "unbekannt"
     print(f"\n{args.task} | {args.model} ({config['parameters']:,} Parameter) | {device} | "
           f"{args.fraction:.0%} der Daten: train {len(train_ds)} / val {len(val_ds)} | "
-          f"{args.epochs} Epochen | -> {out_dir}")
+          f"{args.epochs} Epochen | Normalisierung {norm}, Augmentation {args.augment}\n"
+          f"-> {out_dir}")
     fit(model, train_loader, val_loader, criterion, names, epochs=args.epochs, lr=args.lr,
         multilabel=multilabel, device=device, out_dir=out_dir,
-        checkpoint_extra={"task": args.task, "model": args.model, "img_size": img_size})
+        checkpoint_extra={"task": args.task, "model": args.model, "img_size": img_size,
+                          "normalization": normalization})
 
     best = torch.load(out_dir / "best.pt", map_location=device)
     model.load_state_dict(best["state_dict"])

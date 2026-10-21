@@ -30,7 +30,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--split", choices=["train", "val", "test"], default="val")
     p.add_argument("--iou", type=float, default=0.5)
-    p.add_argument("--cell-diameter", type=int, default=100)
+    p.add_argument("--cell-diameter", type=int, default=None,
+                   help="Default: pro Bild automatisch geschätzt")
     p.add_argument("--limit", type=int, default=None, help="nur die ersten N Bilder")
     p.add_argument("--show", type=int, default=0, help="N Beispielbilder nach docs/ speichern")
     args = p.parse_args()
