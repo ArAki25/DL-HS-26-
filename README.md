@@ -3,7 +3,7 @@
 Deep-Learning-Projekt (FHNW, BSc Business Artificial Intelligence).
 
 **Problem:** Infizierte Blutzellen auf Mikroskopbildern erkennen und das Parasitenstadium bestimmen, für Regionen ohne Fachpersonal.
-**DL-Kern:** Eigene CNNs zur Klassifikation von Zellen (Stadium) und ganzen Ausstrichen, Vergleich mit vortrainierten Modellen, kleines Modell für Smartphone-Mikroskope (Knowledge Distillation). Zellen werden ohne Objektdetektor (kein YOLO) gefunden: klassische Segmentierung, danach Klassifikation.
+**DL-Kern:** Eigene CNNs zur Klassifikation von Zellen (Stadium) und ganzen Ausstrichen, Vergleich mit vortrainierten Modellen, kleines Modell für Smartphone-Mikroskope (Knowledge Distillation). Zellen werden ohne Objektdetektor (kein YOLO) gefunden: klassische Segmentierung, danach Klassifikation. YOLO läuft nur als separater, optionaler Vergleich ([unten](#vergleich-segmentierung-vs-yolo-optional)).
 **Schwierig:** Extremes Klassen-Ungleichgewicht (>95 % gesunde Erythrozyten, nur wenige Gametozyten/Schizonten) und Domain Shift: das offizielle Test-Set stammt aus anderen Ausstrichen.
 **Daten:** [P. vivax (malaria) infected human blood smears](https://www.kaggle.com/datasets/orvile/p-vivax-malaria-infected-human-blood-smears) (= [BBBC041](https://bbbc.broadinstitute.org/bbbc041), Lizenz CC BY-NC-SA 3.0). 1'328 Giemsa-gefärbte Mikroskopbilder (ca. 1600 x 1200 px), ca. 80'000 Zellen mit Box und Kategorie.
 
@@ -129,6 +129,22 @@ python scripts/predict.py <bild.png> runs/<name>/best.pt      # ganze Pipeline a
 
 Jeder Lauf landet in `runs/<datum>_<task>_<modell>/` (`best.pt`, `history.json`, `config.json`, `metrics_val.json`). `runs/` ist nicht im Repo.
 
+## Vergleich: Segmentierung vs. YOLO (optional)
+
+Misst, ob ein gelernter Detektor die Zellen besser findet als Otsu + Watershed. Die Hauptpipeline bleibt unverändert; YOLO hat eigene Skripte und eigene Abhängigkeiten (`pip install -r requirements-yolo.txt`, Ultralytics, AGPL-3.0). Methodik, Fairness-Regeln und Hypothesen: [docs/yolo_vergleich.md](docs/yolo_vergleich.md).
+
+```bash
+python scripts/prepare_yolo.py --mode cell      # 1 Klasse, gleiche Splits/Normalisierung/Skalierung
+python scripts/prepare_yolo.py --mode stage     # 6 Klassen (End-to-End)
+python scripts/train_yolo.py --mode cell        # bzw. --scratch, --mode stage
+python scripts/compare_detection.py --split val \
+    --yolo runs/yolo/<cell-run>/weights/best.pt --yolo runs/yolo/<stage-run>/weights/best.pt \
+    --cell-model runs/<stage-run>/best.pt --show 3
+python scripts/compare_detection.py --split test ...   # ganz am Schluss, nutzt die val-Schwellen
+```
+
+Ergebnis in `runs/compare/<split>/summary.md`: Lokalisierung (P/R/F1, Recall infizierter Zellen, Zählfehler, AP50, ms/Bild) und ganze Pipeline (Macro-F1, F1 pro Stadium, Parasitämie-Fehler) für `seg`, `seg+cnn`, `yolo`, `yolo+cnn` und `yolo e2e`, jeweils mit 95 %-CI aus paired Bootstrap.
+
 ## Daten in Notebooks verwenden
 
 Alle nutzen denselben Split aus [src/data.py](src/data.py): Test = offizielles `test.json` (120 Bilder), Validierung = 15 % der Bilder aus `training.json` (Seed 42). Zellen vom selben Bild landen immer im selben Split.
@@ -150,12 +166,16 @@ train_loader = DataLoader(train_ds, batch_size=128, sampler=balanced_sampler(tra
 ```
 data/raw/p_vivax/    Rohdaten von Kaggle (lokal, nicht im Repo)
 data/processed/      ausgeschnittene Zellen, verkleinerte Bilder, cells.csv, smears.csv
+data/yolo/           YOLO-Export (nur für den Vergleich)
 src/data.py          Annotationen, Split, Datasets, Transforms, Ungleichgewicht
 src/stain.py         Farbnormalisierung gegen Kamera-/Färbungsunterschiede
 src/augment.py       Domain-Augmentationen (Färbung, JPEG, Auflösung)
 src/models.py        eigenes CNN + torchvision-Modelle
 src/engine.py        Trainingsschleife, Metriken
 src/segmentation.py  Zellen finden ohne YOLO (Otsu + Watershed), Zellgrösse schätzen
+src/yolo.py          nur Vergleich: YOLO-Export mit gleicher Vorverarbeitung, Detektor-Wrapper
+src/detection_eval.py gemeinsame Auswertung aller Detektions-Pipelines (+ Bootstrap)
+tests/               Tests für die Auswertung (python -m pytest tests)
 scripts/             Download, Vorbereitung, Training, Auswertung, Vorhersage
 notebooks/           Exploration und Experimente, Dateiname: <kürzel>_<thema>.ipynb
 docs/                Notizen, Abbildungen, Bericht
