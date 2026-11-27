@@ -1,0 +1,5 @@
+# Nur für den optionalen YOLO-Vergleich (scripts/*_yolo.py, scripts/compare_detection.py).
+# Die Hauptpipeline braucht das nicht. Ultralytics steht unter AGPL-3.0.
+-r requirements.txt
+ultralytics>=8.4
+pytest
