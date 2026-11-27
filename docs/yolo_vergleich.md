@@ -39,6 +39,28 @@ Was das für den Vergleich heisst:
 - **Zweistufig gegen einstufig:** Die Hauptpipeline trennt die beiden Aufgaben. So kann das CNN auf hoch aufgelösten Zellausschnitten mit ausgeglichenen Klassen lernen. YOLO muss beides mit denselben Merkmalen lösen. Darum vergleicht `yolo+cnn` YOLO nur als Zellfinder, mit dem eigenen CNN als Klassifikator.
 - **Für den Bericht:** In der Hauptpipeline steckt das Deep Learning nur in der Klassifikation, bei YOLO auch im Finden der Zellen. Ein besseres YOLO-Ergebnis kostet also Annotationsaufwand und Nachvollziehbarkeit. Diesen Trade-off muss der Bericht benennen.
 
+### Einordnung: Ist die Hauptpipeline Deep Learning?
+
+Nicht durchgehend. Die Hauptpipeline ist **hybrid**: Die Zellen findet klassische Bildverarbeitung, Deep Learning steckt nur in der Klassifikation.
+
+| Schritt | Datei | Was es ist |
+|---|---|---|
+| Farbnormalisierung (Weissabgleich, Reinhard im LAB-Raum) | `src/stain.py` | klassische Bildverarbeitung, nichts wird gelernt |
+| Zellen finden (Otsu, Morphologie, Distanztransformation, Watershed) | `src/segmentation.py` | klassische Bildverarbeitung, nichts wird gelernt |
+| Zellgrösse schätzen | `src/segmentation.py` | klassisch: Regionen-Statistik plus ein einmal kalibrierter Faktor |
+| Stadium bestimmen | `src/models.py`, `src/engine.py` | **Deep Learning**: CNN, mit Backpropagation auf annotierten Zellen trainiert |
+| Ausstrich-Klassifikation (Multi-Label) | `simplecnn-deep` | **Deep Learning** |
+
+Drei Begriffe, die im Bericht auseinandergehalten werden sollten:
+
+- **Klassische Bildverarbeitung:** feste, von Hand entworfene Operationen ohne Training. Dazu gehört die Segmentierung.
+- **Klassisches Machine Learning:** gelernte Modelle wie SVM oder Random Forest auf Merkmalen, die man von Hand definiert (Fläche, Farbe, Textur). Das wird im Projekt **nicht** verwendet.
+- **Deep Learning:** Das Netz lernt die Merkmale selbst aus den Pixeln. Dazu gehört das Zell-CNN. Die Architektur ist eher klassisch, im VGG-Stil: Conv-BN-ReLU-Blöcke, Global Average Pooling, ein Linear-Kopf. Keine Residual-Verbindungen, kein Attention.
+
+"Klassisches Deep Learning" ist kein feststehender Begriff. Passend wäre für den Bericht zum Beispiel: *"zweistufige, hybride Pipeline aus klassischer Segmentierung (Otsu + Watershed) und CNN-basierter Klassifikation"*.
+
+Der Unterschied zu YOLO liegt genau hier: In der Hauptpipeline ist nur die Klassifikation gelernt, bei YOLO auch das Finden der Zellen. Das ist der Kern des Vergleichs.
+
 ## Forschungsfragen
 
 1. **Lokalisierung:** Findet YOLO die annotierten Zellen besser (Precision, Recall, vor allem Recall *infizierter* Zellen) als die Segmentierung, und bleibt das unter Domain Shift (Test = andere Kamera) so?
