@@ -2,6 +2,43 @@
 
 Die Hauptpipeline findet Zellen ohne Objektdetektor (Otsu + Watershed, `src/segmentation.py`) und klassifiziert sie mit einem eigenen CNN. Dieser Vergleich prüft, ob ein gelernter Detektor besser wäre. Er **ersetzt nichts**: eigene Skripte, eigene Abhängigkeiten (`requirements-yolo.txt`), die bestehenden Skripte sind unverändert.
 
+## Grundsätzlicher Unterschied
+
+**Die Hauptpipeline findet Zellen mit festen, von Hand gesetzten Regeln. YOLO lernt aus annotierten Beispielen, wie Zellen aussehen.**
+
+**Hauptpipeline: klassische Segmentierung, danach Klassifikation.** Zwei getrennte Stufen:
+
+1. **Zellen finden** (`src/segmentation.py`, ohne Lernen):
+   - Graubild, dann Otsu-Schwelle: Was dunkler als der Hintergrund ist, gilt als Zelle.
+   - Löcher füllen, weil Erythrozyten in der Mitte heller sind.
+   - Distanztransformation und Watershed trennen Zellen, die sich berühren.
+   - Jede Region wird zu einer Box.
+2. **Klassifizieren:** Jede Box wird ausgeschnitten, auf 96 px gebracht und vom eigenen CNN einem Stadium zugeordnet.
+
+Gelernt wird nur in Stufe 2. Stufe 1 beruht auf festen Annahmen: Zellen sind dunkler als der Hintergrund, etwa rund und etwa gleich gross.
+
+**YOLO: ein gelernter Detektor in einem Schritt.** Ein einziges neuronales Netz bekommt das ganze Bild. In einem Durchlauf gibt es für jede Zelle eine Box, einen Konfidenzwert und eine Klasse aus. Was eine Zelle ist und wo ihre Grenzen liegen, lernt das Netz aus den annotierten Boxen. Es gibt keine fest einprogrammierte Regel.
+
+| | Hauptpipeline | YOLO |
+|---|---|---|
+| **Prinzip** | Regeln (Helligkeit, Form, Distanz) | aus Daten gelernte Merkmale |
+| **Annotationen fürs Finden** | keine (nur 3 einmal kalibrierte Parameter) | Box-Annotationen nötig |
+| **Aufbau** | zweistufig: erst finden, dann klassifizieren | einstufig: beides gleichzeitig |
+| **Ausgabe** | Boxen ohne Konfidenz | Boxen mit Konfidenz, Schwelle einstellbar |
+| **Auflösung pro Zelle beim Klassifizieren** | 96 px, eigener Ausschnitt | ca. 48 px, Merkmale aus dem ganzen Bild |
+| **Seltene Stadien** | Balanced Sampler im CNN | kein Ausgleich der seltenen Klassen |
+| **Andere Kamera (Domain Shift)** | Otsu berechnet die Schwelle pro Bild neu | feste Gewichte, kennt nur die Trainingsverteilung |
+| **Typische Fehler** | Zellhaufen falsch getrennt, Schmutz, Boxen etwas zu klein (blasser Rand fehlt) | unbekannte Färbung oder Kamera, seltene Klassen, dicht überlappende Zellen |
+| **Nachvollziehbarkeit** | jeder Schritt einzeln prüfbar | Black Box |
+| **Rechenaufwand** | CPU, keine Modellgewichte | Training auf der GPU, Inferenz trotzdem leicht (YOLO26n: ca. 2,4 M Parameter) |
+
+Was das für den Vergleich heisst:
+
+- **Grenze der Hauptpipeline:** Wo ihre Annahmen nicht stimmen, versagt sie. Typisch sind überlappende Zellen ohne klaren "Sattel" zwischen den Distanzmaxima, oder Zellen, die nicht dunkler sind als der Hintergrund. YOLO kann solche Fälle lernen, wenn sie in den Trainingsdaten vorkommen.
+- **Grenze von YOLO:** YOLO ist nur so gut wie die Trainingsverteilung. Das Test-Set kommt von einer anderen Kamera. Dort kann die Regel-Methode robuster sein, weil Otsu sich jedem Bild neu anpasst.
+- **Zweistufig gegen einstufig:** Die Hauptpipeline trennt die beiden Aufgaben. So kann das CNN auf hoch aufgelösten Zellausschnitten mit ausgeglichenen Klassen lernen. YOLO muss beides mit denselben Merkmalen lösen. Darum vergleicht `yolo+cnn` YOLO nur als Zellfinder, mit dem eigenen CNN als Klassifikator.
+- **Für den Bericht:** In der Hauptpipeline steckt das Deep Learning nur in der Klassifikation, bei YOLO auch im Finden der Zellen. Ein besseres YOLO-Ergebnis kostet also Annotationsaufwand und Nachvollziehbarkeit. Diesen Trade-off muss der Bericht benennen.
+
 ## Forschungsfragen
 
 1. **Lokalisierung:** Findet YOLO die annotierten Zellen besser (Precision, Recall, vor allem Recall *infizierter* Zellen) als die Segmentierung, und bleibt das unter Domain Shift (Test = andere Kamera) so?
